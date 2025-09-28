@@ -1,0 +1,1025 @@
+##########################
+# WEB UIの停止
+##########################
+#####################################
+# 1. 環境変数
+#####################################
+export ENV="inf"
+export PROJECT="kish-code"
+export CLUSTER_NAME="${ENV}-${PROJECT}-eks"
+
+#####################################
+# 2. 操作対象のクラスターを指定
+#####################################
+
+aws eks update-kubeconfig --name ${CLUSTER_NAME} \
+  --role arn:aws:iam::405501939914:role/inf-kish-code-eks-shell-role
+
+CLUSTER_ARN=$(aws eks describe-cluster --name ${CLUSTER_NAME} \
+  --query cluster.arn \
+  --output text)
+echo CLUSTER_ARN=$CLUSTER_ARN
+
+kubectl config set-context $CLUSTER_ARN
+kubectl config current-context
+
+
+#現在のGitLabのWebUIデプロイメントのスケールサイズを表示
+kubectl get deployment -l='app in(sidekiq,webservice)' -n gitlab
+
+#GitLabのWebUIデプロイメントのスケールサイズを0に更新
+kubectl scale deployment -l='app in(sidekiq,webservice)' -n gitlab --replicas=0
+
+#変更後のGitLabのWebUIデプロイメントのスケールサイズを表示
+kubectl get deployment -l='app in(sidekiq,webservice)' -n gitlab
+
+1. プロジェクト作成10個
+	プロジェクト名：test01 02 03...
+		ファイルコミット：test1_before_01 test2_before_01 test3_before_01..
+
+##########################
+# WEB UIの再開
+##########################
+
+GITLAB_HELM_VALUE_JSON=$(helm get values gitlab -n gitlab -o json)
+MIN_REPLICAS_SIDEKIQ=$(echo $GITLAB_HELM_VALUE_JSON | jq .gitlab.sidekiq.minReplicas)
+echo MIN_REPLICAS_SIDEKIQ=$MIN_REPLICAS_SIDEKIQ
+MIN_REPLICAS_WEBSERVICE=$(echo $GITLAB_HELM_VALUE_JSON | jq .gitlab.webservice.minReplicas)
+echo MIN_REPLICAS_WEBSERVICE=$MIN_REPLICAS_WEBSERVICE
+
+#現在のSidekiqデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=sidekiq -n gitlab
+
+#Sidekiqデプロイメントのスケールサイズを元のサイズに更新
+kubectl scale deployment -l app=sidekiq -n gitlab --replicas=$MIN_REPLICAS_SIDEKIQ
+
+#変更後のSidekiqデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=sidekiq -n gitlab
+
+#現在のWebServiceデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=webservice -n gitlab
+
+#WebServiceデプロイメントのスケールサイズを元のサイズに更新
+kubectl scale deployment -l app=webservice -n gitlab --replicas=$MIN_REPLICAS_WEBSERVICE
+
+#変更後のWebServiceデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=webservice -n gitlab
+
+
+###########################
+# Praefect
+###########################
+
+#--------------------------
+# Praefect 停止
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export PRAEFECT_ASG_NAME="${ENV}-${PROJECT}-git-praefect"
+
+#Praefect ASGのインスタンスIDを取得
+INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-0259eb5b08a0affd7 i-06b7fddfb60879d8f i-0f981b0845af9b691
+```
+
+#ASG のサイズを 0 に下げる
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --min-size 0 
+
+#0になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+--------------------------------
+|   DescribeAutoScalingGroups  |
++------------------------------+
+|  inf-kish-code-git-praefect  |
+|  0                           |
+|  3                           |
+|  3                           |
++------------------------------+
+```
+
+#インスタンスを Standby に移行
+#Standby にすることで ASG 管理下から一時的に外し、削除や置き換えの対象にならなくなります。
+aws autoscaling enter-standby \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "cd066611-2cef-afbc-f5c4-6d5a154e9cd7",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Moving EC2 instance to Standby: i-0259eb5b08a0affd7",
+            "Cause": "At 2025-09-26T04:32:27Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:32:27.115000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "aca66611-2cef-aff0-f5b8-7f88fa5fadd0",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Moving EC2 instance to Standby: i-0f981b0845af9b691",
+            "Cause": "At 2025-09-26T04:32:27Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:32:27.115000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "24866611-2cef-afbb-d412-5fc37da883ca",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Moving EC2 instance to Standby: i-06b7fddfb60879d8f",
+            "Cause": "At 2025-09-26T04:32:27Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:32:27.115000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#Standbyになるまで待つ
+aws autoscaling describe-auto-scaling-instances \
+  --instance-ids $INSTANCE_IDS \
+  --query 'AutoScalingInstances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+------------------------------------
+|   DescribeAutoScalingInstances   |
++----------------------+-----------+
+|  i-0259eb5b08a0affd7 |  Standby  |
+|  i-06b7fddfb60879d8f |  Standby  |
+|  i-0f981b0845af9b691 |  Standby  |
++----------------------+-----------+
+```
+
+
+#インスタンスを ASG からデタッチ（切り離す）
+#この時 --should-decrement-desired-capacity を付けることで ASG 側の DesiredCapacity も減らし、
+新しいインスタンスが補充されるのを防ぎます。
+aws autoscaling detach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "4e466611-3a20-360b-016d-84217835f0bd",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Detaching EC2 instance: i-0259eb5b08a0affd7",
+            "Cause": "At 2025-09-26T04:36:03Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:36:03.213000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "46d66611-3a20-36d8-6cf2-fd71faf939f0",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Detaching EC2 instance: i-0f981b0845af9b691",
+            "Cause": "At 2025-09-26T04:36:03Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:36:03.213000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "99766611-3a20-3489-ff9a-2f693a5df04f",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Detaching EC2 instance: i-06b7fddfb60879d8f",
+            "Cause": "At 2025-09-26T04:36:03Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:36:03.213000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#デタッチできたか確認 プロンプトの出力が帰って来ないことを確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+--------------------------------------
+|      DescribeAutoScalingGroups     |
++----------------------+-------------+
+|  i-0259eb5b08a0affd7 |  Detaching  |
+|  i-06b7fddfb60879d8f |  Detaching  |
+|  i-0f981b0845af9b691 |  Detaching  |
++----------------------+-------------+
+```
+
+#インスタンスを一時停止
+aws ec2 stop-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StoppingInstances": [
+        {
+            "InstanceId": "i-0259eb5b08a0affd7",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-0f981b0845af9b691",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-06b7fddfb60879d8f",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
+
+#--------------------------
+# Praefect 起動
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export PRAEFECT_ASG_NAME="${ENV}-${PROJECT}-git-praefect"
+
+# 1. 停止中インスタンスIDを取得
+INSTANCE_IDS=$(aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=*git-praefect*" "Name=instance-state-name,Values=stopped" \
+  --query 'Reservations[*].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-0259eb5b08a0affd7 i-0f981b0845af9b691 i-06b7fddfb60879d8f
+```
+
+# 2. 停止中インスタンスを起動
+aws ec2 start-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StartingInstances": [
+        {
+            "InstanceId": "i-06b7fddfb60879d8f",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0259eb5b08a0affd7",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0f981b0845af9b691",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        }
+    ]
+}
+```
+
+# 3. インスタンスが running かつステータスチェック OK になるまで確認
+aws ec2 describe-instance-status \
+  --instance-ids $INSTANCE_IDS \
+  --include-all-instances \
+  --query 'InstanceStatuses[*].[InstanceId,InstanceState.Name,SystemStatus.Status,InstanceStatus.Status]' \
+  --output table
+```
+-----------------------------------------------------
+|                 DescribeInstanceStatus            |
++----------------------+----------+-----+-----------+
+|  i-06b7fddfb60879d8f |  running |  ok |  ok       |
+|  i-0259eb5b08a0affd7 |  running |  ok |  ok       |
+|  i-0f981b0845af9b691 |  running |  ok |  ok       |
++----------------------+----------+-----+-----------+
+```
+
+# 4. 停止中インスタンスを ASG に再アタッチ
+aws autoscaling attach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME"
+
+# 6. ASG の min/desired/max を元の 3 に戻す
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --min-size 3 
+
+# 7. サイズが戻ったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+--------------------------------
+|   DescribeAutoScalingGroups  |
++------------------------------+
+|  inf-kish-code-git-praefect  |
+|  3                           |
+|  3                           |
+|  3                           |
++------------------------------+
+```
+
+
+
+
+
+###########################
+# Gitaly
+###########################
+
+#--------------------------
+# Gitaly 停止
+#--------------------------
+
+export ENV="inf"
+export PROJECT="kish-code"
+export GITALY_ASG_NAME="${ENV}-${PROJECT}-git-gitaly"
+
+#GITALY ASGのインスタンスIDを取得
+INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-02db8c87549adad3a i-03ce225b8caf5f13e i-0e6a4fc7e83a6ebab
+```
+
+#ASG のサイズを 0 に下げる
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --min-size 0 
+
+#0になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------
+|  DescribeAutoScalingGroups |
++----------------------------+
+|  inf-kish-code-git-gitaly  |
+|  0                         |
+|  3                         |
+|  3                         |
++----------------------------+
+```
+
+#インスタンスを Standby に移行
+#Standby にすることで ASG 管理下から一時的に外し、削除や置き換えの対象にならなくなります。
+aws autoscaling enter-standby \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "2c266611-5324-4fd2-30d8-772822247831",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Moving EC2 instance to Standby: i-0e6a4fc7e83a6ebab",
+            "Cause": "At 2025-09-26T04:42:53Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:42:53.075000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "e2066611-5324-4da8-e496-21ff3793db34",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Moving EC2 instance to Standby: i-02db8c87549adad3a",
+            "Cause": "At 2025-09-26T04:42:53Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:42:53.075000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "dcd66611-5324-4eba-0182-a5aca099f70e",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Moving EC2 instance to Standby: i-03ce225b8caf5f13e",
+            "Cause": "At 2025-09-26T04:42:53Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:42:53.075000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#Standbyになるまで待つ
+aws autoscaling describe-auto-scaling-instances \
+  --instance-ids $INSTANCE_IDS \
+  --query 'AutoScalingInstances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+------------------------------------
+|   DescribeAutoScalingInstances   |
++----------------------+-----------+
+|  i-02db8c87549adad3a |  Standby  |
+|  i-03ce225b8caf5f13e |  Standby  |
+|  i-0e6a4fc7e83a6ebab |  Standby  |
++----------------------+-----------+
+```
+
+#インスタンスを ASG からデタッチ（切り離す）
+#この時 --should-decrement-desired-capacity を付けることで ASG 側の DesiredCapacity も減らし、
+新しいインスタンスが補充されるのを防ぎます。
+aws autoscaling detach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "7fd66611-55d5-3929-6fbb-b25ba1c17943",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Detaching EC2 instance: i-0e6a4fc7e83a6ebab",
+            "Cause": "At 2025-09-26T04:43:37Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:43:37.166000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "2e266611-55d5-3b4f-71e7-d45590ec401a",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Detaching EC2 instance: i-02db8c87549adad3a",
+            "Cause": "At 2025-09-26T04:43:37Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:43:37.166000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "67666611-55d5-3b56-cde5-4436f1bbffad",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Detaching EC2 instance: i-03ce225b8caf5f13e",
+            "Cause": "At 2025-09-26T04:43:37Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:43:37.166000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#デタッチできたか確認 
+#デタッチがすぐできるとプロンプトの出力が返ってこない
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].[InstanceId,LifecycleState]' \
+  --output table
+--------------------------------------
+|      DescribeAutoScalingGroups     |
++----------------------+-------------+
+|  i-02db8c87549adad3a |  Detaching  |
+|  i-03ce225b8caf5f13e |  Detaching  |
+|  i-0e6a4fc7e83a6ebab |  Detaching  |
++----------------------+-------------+
+
+#インスタンスを一時停止
+aws ec2 stop-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StoppingInstances": [
+        {
+            "InstanceId": "i-03ce225b8caf5f13e",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-0e6a4fc7e83a6ebab",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-02db8c87549adad3a",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
+
+#再起動する場合
+aws ec2 start-instances --instance-ids $INSTANCE_IDS
+
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --min-size 3 
+
+#. インスタンスを Standby から戻す（ASG 管理下に戻す）
+aws autoscaling exit-standby \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$GITALY_ASG_NAME"
+
+# . ASG の状態を確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize, Instances[*].[InstanceId,LifecycleState]]' \
+  --output table
+
+
+#--------------------------
+# Gitaly 起動
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export GITALY_ASG_NAME="${ENV}-${PROJECT}-git-gitaly"
+
+# 1. 停止中インスタンスIDを取得
+INSTANCE_IDS=$(aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=*git-gitaly*" "Name=instance-state-name,Values=stopped" \
+  --query 'Reservations[*].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-0e6a4fc7e83a6ebab i-02db8c87549adad3a i-03ce225b8caf5f13e
+```
+
+# 2. 停止中インスタンスを起動
+aws ec2 start-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StartingInstances": [
+        {
+            "InstanceId": "i-03ce225b8caf5f13e",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0e6a4fc7e83a6ebab",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-02db8c87549adad3a",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        }
+    ]
+}
+
+```
+
+# 3. インスタンスが running かつステータスチェック OK になるまで確認
+aws ec2 describe-instance-status \
+  --instance-ids $INSTANCE_IDS \
+  --include-all-instances \
+  --query 'InstanceStatuses[*].[InstanceId,InstanceState.Name,SystemStatus.Status,InstanceStatus.Status]' \
+  --output table
+```
+------------------------------------------------
+|            DescribeInstanceStatus            |
++----------------------+----------+-----+------+
+|  i-0e6a4fc7e83a6ebab |  running |  ok |  ok  |
+|  i-03ce225b8caf5f13e |  running |  ok |  ok  |
+|  i-02db8c87549adad3a |  running |  ok |  ok  |
++----------------------+----------+-----+------+
+```
+
+# 4. 停止中インスタンスを ASG に再アタッチ
+aws autoscaling attach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$GITALY_ASG_NAME"
+
+# 6. ASG の min/desired/max を元の 3 に戻す
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --min-size 3 
+
+# 7. サイズが戻ったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------
+|  DescribeAutoScalingGroups |
++----------------------------+
+|  inf-kish-code-git-gitaly  |
+|  3                         |
+|  3                         |
+|  3                         |
++----------------------------+
+```
+
+
+
+###########################
+# EKS Node
+###########################
+
+#--------------------------
+# EKS Node 停止
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export EKS_CLUSTER_NAME="${ENV}-${PROJECT}-eks"
+
+# 1. EKS に紐づく NodeGroup 名を取得
+NODEGROUP_NAME=$(aws eks list-nodegroups \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --query 'nodegroups' \
+  --output text)
+echo $NODEGROUP_NAME
+```
+inf-kish-code-ng-2025092408145528510000000c
+```
+
+# 2. NodeGroup に紐づく ASG 名を取得
+NODE_ASG_NAME=$(aws eks describe-nodegroup \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --nodegroup-name "$NODEGROUP_NAME" \
+  --query 'nodegroup.resources.autoScalingGroups[0].name' \
+  --output text)
+echo $NODE_ASG_NAME
+```
+eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821
+```
+
+# 3. ASG に登録されているインスタンスIDを取得
+INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$NODE_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-050bc6904d8e80537 i-093392a32ca33092a i-0c8966d76a1a8b4b2
+```
+
+# 4. ASG のサイズを 0 に変更（新しいインスタンス補充を防ぐ）
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --min-size 0
+
+#0になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$NODE_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------------------------------------------------------------------
+|                                DescribeAutoScalingGroups                               |
++----------------------------------------------------------------------------------------+
+|  eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821  |
+|  0                                                                                     |
+|  3                                                                                     |
+|  3                                                                                     |
++----------------------------------------------------------------------------------------+
+```
+
+# 5. インスタンスを Standby に移行
+aws autoscaling enter-standby \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "ea066611-71b4-f2b7-210e-8ecdb369dc8f",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Moving EC2 instance to Standby: i-093392a32ca33092a",
+            "Cause": "At 2025-09-26T04:51:13Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:51:13.852000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "6fb66611-71b4-f711-7af0-6a26283e48e0",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Moving EC2 instance to Standby: i-0c8966d76a1a8b4b2",
+            "Cause": "At 2025-09-26T04:51:13Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:51:13.853000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        },
+        {
+            "ActivityId": "cc366611-71b4-f471-438c-64274be8bdb8",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Moving EC2 instance to Standby: i-050bc6904d8e80537",
+            "Cause": "At 2025-09-26T04:51:13Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:51:13.853000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        }
+    ]
+}
+```
+
+# 6. Standby 状態を確認
+aws autoscaling describe-auto-scaling-instances \
+  --instance-ids $INSTANCE_IDS \
+  --query 'AutoScalingInstances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+------------------------------------
+|   DescribeAutoScalingInstances   |
++----------------------+-----------+
+|  i-050bc6904d8e80537 |  Standby  |
+|  i-093392a32ca33092a |  Standby  |
+|  i-0c8966d76a1a8b4b2 |  Standby  |
++----------------------+-----------+
+```
+
+# 7. ASG からインスタンスをデタッチ
+aws autoscaling detach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "2e766611-73cf-ccb4-c15b-4fd119e685b0",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Detaching EC2 instance: i-093392a32ca33092a",
+            "Cause": "At 2025-09-26T04:51:48Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:51:48.339000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "ad266611-73cf-cc6a-d4d5-1bad5fddca12",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Detaching EC2 instance: i-0c8966d76a1a8b4b2",
+            "Cause": "At 2025-09-26T04:51:48Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:51:48.339000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        },
+        {
+            "ActivityId": "2ae66611-73cf-cceb-5575-4d3760c868eb",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Detaching EC2 instance: i-050bc6904d8e80537",
+            "Cause": "At 2025-09-26T04:51:48Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:51:48.339000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        }
+    ]
+}
+```
+
+# 8. インスタンスを停止
+aws ec2 stop-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StoppingInstances": [
+        {
+            "InstanceId": "i-0c8966d76a1a8b4b2",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-050bc6904d8e80537",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-093392a32ca33092a",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
+
+#--------------------------
+# EKS Node起動
+#--------------------------
+# 1. NodeGroup 名を取得
+NODEGROUP_NAME=$(aws eks list-nodegroups \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --query 'nodegroups' \
+  --output text)
+echo $NODEGROUP_NAME
+```
+inf-kish-code-ng-2025092408145528510000000c
+```
+
+# 2. NodeGroup に紐づく ASG 名を取得
+NODE_ASG_NAME=$(aws eks describe-nodegroup \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --nodegroup-name "$NODEGROUP_NAME" \
+  --query 'nodegroup.resources.autoScalingGroups[0].name' \
+  --output text)
+echo $NODE_ASG_NAME
+```
+eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821
+```
+
+# 3. 停止中インスタンスを検索（EKS クラスタタグで絞る）
+INSTANCE_IDS=$(aws ec2 describe-instances \
+  --filters "Name=tag:eks:cluster-name,Values=$EKS_CLUSTER_NAME" "Name=instance-state-name,Values=stopped" \
+  --query 'Reservations[*].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-050bc6904d8e80537 i-093392a32ca33092a i-0c8966d76a1a8b4b2
+```
+
+# 4. 停止していたインスタンスを起動
+aws ec2 start-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StartingInstances": [
+        {
+            "InstanceId": "i-050bc6904d8e80537",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0c8966d76a1a8b4b2",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-093392a32ca33092a",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        }
+    ]
+}
+```
+
+# 5.インスタンスが running になるまで待つ
+aws ec2 describe-instance-status \
+  --instance-ids $INSTANCE_IDS \
+  --include-all-instances \
+  --query 'InstanceStatuses[*].[InstanceId,InstanceState.Name,SystemStatus.Status,InstanceStatus.Status]' \
+  --output table
+```
+------------------------------------------------
+|            DescribeInstanceStatus            |
++----------------------+----------+-----+------+
+|  i-093392a32ca33092a |  running |  ok |  ok  |
+|  i-050bc6904d8e80537 |  running |  ok |  ok  |
+|  i-0c8966d76a1a8b4b2 |  running |  ok |  ok  |
++----------------------+----------+-----+------+
+```
+# 6. インスタンスを ASG に再アタッチ
+aws autoscaling attach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$NODE_ASG_NAME"
+
+# 7. ASG の最小サイズを元に戻す
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --min-size 3
+
+# 8. になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$NODE_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------------------------------------------------------------------
+|                                DescribeAutoScalingGroups                               |
++----------------------------------------------------------------------------------------+
+|  eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821  |
+|  3                                                                                     |
+|  3                                                                                     |
+|  3                                                                                     |
++----------------------------------------------------------------------------------------+
+```
+
+
+
+
+
+

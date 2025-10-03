@@ -1,0 +1,1815 @@
+##########################
+# WEB UIの停止
+##########################
+#####################################
+# 1. 環境変数
+#####################################
+export ENV="inf"
+export PROJECT="kish-code"
+export CLUSTER_NAME="${ENV}-${PROJECT}-eks"
+
+#####################################
+# 2. 操作対象のクラスターを指定
+#####################################
+
+aws eks update-kubeconfig --name ${CLUSTER_NAME} \
+  --role arn:aws:iam::405501939914:role/inf-kish-code-eks-shell-role
+
+CLUSTER_ARN=$(aws eks describe-cluster --name ${CLUSTER_NAME} \
+  --query cluster.arn \
+  --output text)
+echo CLUSTER_ARN=$CLUSTER_ARN
+
+kubectl config set-context $CLUSTER_ARN
+kubectl config current-context
+
+
+#現在のGitLabのWebUIデプロイメントのスケールサイズを表示
+kubectl get deployment -l='app in(sidekiq,webservice)' -n gitlab
+
+#GitLabのWebUIデプロイメントのスケールサイズを0に更新
+kubectl scale deployment -l='app in(sidekiq,webservice)' -n gitlab --replicas=0
+
+#変更後のGitLabのWebUIデプロイメントのスケールサイズを表示
+kubectl get deployment -l='app in(sidekiq,webservice)' -n gitlab
+
+1. プロジェクト作成10個
+	プロジェクト名：test01 02 03...
+		ファイルコミット：test1_before_01 test2_before_01 test3_before_01..
+
+##########################
+# WEB UIの再開
+##########################
+
+GITLAB_HELM_VALUE_JSON=$(helm get values gitlab -n gitlab -o json)
+MIN_REPLICAS_SIDEKIQ=$(echo $GITLAB_HELM_VALUE_JSON | jq .gitlab.sidekiq.minReplicas)
+echo MIN_REPLICAS_SIDEKIQ=$MIN_REPLICAS_SIDEKIQ
+MIN_REPLICAS_WEBSERVICE=$(echo $GITLAB_HELM_VALUE_JSON | jq .gitlab.webservice.minReplicas)
+echo MIN_REPLICAS_WEBSERVICE=$MIN_REPLICAS_WEBSERVICE
+
+#現在のSidekiqデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=sidekiq -n gitlab
+
+#Sidekiqデプロイメントのスケールサイズを元のサイズに更新
+kubectl scale deployment -l app=sidekiq -n gitlab --replicas=$MIN_REPLICAS_SIDEKIQ
+
+#変更後のSidekiqデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=sidekiq -n gitlab
+
+#現在のWebServiceデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=webservice -n gitlab
+
+#WebServiceデプロイメントのスケールサイズを元のサイズに更新
+kubectl scale deployment -l app=webservice -n gitlab --replicas=$MIN_REPLICAS_WEBSERVICE
+
+#変更後のWebServiceデプロイメントのスケールサイズを表示
+kubectl get deployment -l app=webservice -n gitlab
+
+
+###########################
+# Praefect
+###########################
+
+#--------------------------
+# Praefect 停止
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export PRAEFECT_ASG_NAME="${ENV}-${PROJECT}-git-praefect"
+
+#Praefect ASGのインスタンスIDを取得
+INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-0259eb5b08a0affd7 i-06b7fddfb60879d8f i-0f981b0845af9b691
+```
+
+#ASG のサイズを 0 に下げる
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --min-size 0 
+
+#0になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+--------------------------------
+|   DescribeAutoScalingGroups  |
++------------------------------+
+|  inf-kish-code-git-praefect  |
+|  0                           |
+|  3                           |
+|  3                           |
++------------------------------+
+```
+
+#インスタンスを Standby に移行
+#Standby にすることで ASG 管理下から一時的に外し、削除や置き換えの対象にならなくなります。
+aws autoscaling enter-standby \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "cd066611-2cef-afbc-f5c4-6d5a154e9cd7",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Moving EC2 instance to Standby: i-0259eb5b08a0affd7",
+            "Cause": "At 2025-09-26T04:32:27Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:32:27.115000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "aca66611-2cef-aff0-f5b8-7f88fa5fadd0",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Moving EC2 instance to Standby: i-0f981b0845af9b691",
+            "Cause": "At 2025-09-26T04:32:27Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:32:27.115000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "24866611-2cef-afbb-d412-5fc37da883ca",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Moving EC2 instance to Standby: i-06b7fddfb60879d8f",
+            "Cause": "At 2025-09-26T04:32:27Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:32:27.115000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#Standbyになるまで待つ
+aws autoscaling describe-auto-scaling-instances \
+  --instance-ids $INSTANCE_IDS \
+  --query 'AutoScalingInstances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+------------------------------------
+|   DescribeAutoScalingInstances   |
++----------------------+-----------+
+|  i-0259eb5b08a0affd7 |  Standby  |
+|  i-06b7fddfb60879d8f |  Standby  |
+|  i-0f981b0845af9b691 |  Standby  |
++----------------------+-----------+
+```
+
+
+#インスタンスを ASG からデタッチ（切り離す）
+#この時 --should-decrement-desired-capacity を付けることで ASG 側の DesiredCapacity も減らし、
+新しいインスタンスが補充されるのを防ぎます。
+aws autoscaling detach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "4e466611-3a20-360b-016d-84217835f0bd",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Detaching EC2 instance: i-0259eb5b08a0affd7",
+            "Cause": "At 2025-09-26T04:36:03Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:36:03.213000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "46d66611-3a20-36d8-6cf2-fd71faf939f0",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Detaching EC2 instance: i-0f981b0845af9b691",
+            "Cause": "At 2025-09-26T04:36:03Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:36:03.213000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "99766611-3a20-3489-ff9a-2f693a5df04f",
+            "AutoScalingGroupName": "inf-kish-code-git-praefect",
+            "Description": "Detaching EC2 instance: i-06b7fddfb60879d8f",
+            "Cause": "At 2025-09-26T04:36:03Z instances i-0259eb5b08a0affd7, i-06b7fddfb60879d8f, i-0f981b0845af9b691 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:36:03.213000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#デタッチできたか確認 プロンプトの出力が帰って来ないことを確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+--------------------------------------
+|      DescribeAutoScalingGroups     |
++----------------------+-------------+
+|  i-0259eb5b08a0affd7 |  Detaching  |
+|  i-06b7fddfb60879d8f |  Detaching  |
+|  i-0f981b0845af9b691 |  Detaching  |
++----------------------+-------------+
+```
+
+#インスタンスを一時停止
+aws ec2 stop-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StoppingInstances": [
+        {
+            "InstanceId": "i-0259eb5b08a0affd7",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-0f981b0845af9b691",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-06b7fddfb60879d8f",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
+
+#--------------------------
+# Praefect 起動
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export PRAEFECT_ASG_NAME="${ENV}-${PROJECT}-git-praefect"
+
+# 1. 停止中インスタンスIDを取得
+INSTANCE_IDS=$(aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=*git-praefect*" "Name=instance-state-name,Values=stopped" \
+  --query 'Reservations[*].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-0259eb5b08a0affd7 i-0f981b0845af9b691 i-06b7fddfb60879d8f
+```
+
+# 2. 停止中インスタンスを起動
+aws ec2 start-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StartingInstances": [
+        {
+            "InstanceId": "i-06b7fddfb60879d8f",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0259eb5b08a0affd7",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0f981b0845af9b691",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        }
+    ]
+}
+```
+
+# 3. インスタンスが running かつステータスチェック OK になるまで確認
+aws ec2 describe-instance-status \
+  --instance-ids $INSTANCE_IDS \
+  --include-all-instances \
+  --query 'InstanceStatuses[*].[InstanceId,InstanceState.Name,SystemStatus.Status,InstanceStatus.Status]' \
+  --output table
+```
+-----------------------------------------------------
+|                 DescribeInstanceStatus            |
++----------------------+----------+-----+-----------+
+|  i-06b7fddfb60879d8f |  running |  ok |  ok       |
+|  i-0259eb5b08a0affd7 |  running |  ok |  ok       |
+|  i-0f981b0845af9b691 |  running |  ok |  ok       |
++----------------------+----------+-----+-----------+
+```
+
+# 4. 停止中インスタンスを ASG に再アタッチ
+aws autoscaling attach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME"
+
+# 6. ASG の min/desired/max を元の 3 に戻す
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$PRAEFECT_ASG_NAME" \
+  --min-size 3 
+
+# 7. サイズが戻ったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$PRAEFECT_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+--------------------------------
+|   DescribeAutoScalingGroups  |
++------------------------------+
+|  inf-kish-code-git-praefect  |
+|  3                           |
+|  3                           |
+|  3                           |
++------------------------------+
+```
+
+
+
+
+
+###########################
+# Gitaly
+###########################
+
+#--------------------------
+# Gitaly 停止
+#--------------------------
+
+export ENV="inf"
+export PROJECT="kish-code"
+export GITALY_ASG_NAME="${ENV}-${PROJECT}-git-gitaly"
+
+#GITALY ASGのインスタンスIDを取得
+INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-02db8c87549adad3a i-03ce225b8caf5f13e i-0e6a4fc7e83a6ebab
+```
+
+#ASG のサイズを 0 に下げる
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --min-size 0 
+
+#0になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------
+|  DescribeAutoScalingGroups |
++----------------------------+
+|  inf-kish-code-git-gitaly  |
+|  0                         |
+|  3                         |
+|  3                         |
++----------------------------+
+```
+
+#インスタンスを Standby に移行
+#Standby にすることで ASG 管理下から一時的に外し、削除や置き換えの対象にならなくなります。
+aws autoscaling enter-standby \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "2c266611-5324-4fd2-30d8-772822247831",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Moving EC2 instance to Standby: i-0e6a4fc7e83a6ebab",
+            "Cause": "At 2025-09-26T04:42:53Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:42:53.075000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "e2066611-5324-4da8-e496-21ff3793db34",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Moving EC2 instance to Standby: i-02db8c87549adad3a",
+            "Cause": "At 2025-09-26T04:42:53Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:42:53.075000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "dcd66611-5324-4eba-0182-a5aca099f70e",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Moving EC2 instance to Standby: i-03ce225b8caf5f13e",
+            "Cause": "At 2025-09-26T04:42:53Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:42:53.075000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#Standbyになるまで待つ
+aws autoscaling describe-auto-scaling-instances \
+  --instance-ids $INSTANCE_IDS \
+  --query 'AutoScalingInstances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+------------------------------------
+|   DescribeAutoScalingInstances   |
++----------------------+-----------+
+|  i-02db8c87549adad3a |  Standby  |
+|  i-03ce225b8caf5f13e |  Standby  |
+|  i-0e6a4fc7e83a6ebab |  Standby  |
++----------------------+-----------+
+```
+
+#インスタンスを ASG からデタッチ（切り離す）
+#この時 --should-decrement-desired-capacity を付けることで ASG 側の DesiredCapacity も減らし、
+新しいインスタンスが補充されるのを防ぎます。
+aws autoscaling detach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "7fd66611-55d5-3929-6fbb-b25ba1c17943",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Detaching EC2 instance: i-0e6a4fc7e83a6ebab",
+            "Cause": "At 2025-09-26T04:43:37Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:43:37.166000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        },
+        {
+            "ActivityId": "2e266611-55d5-3b4f-71e7-d45590ec401a",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Detaching EC2 instance: i-02db8c87549adad3a",
+            "Cause": "At 2025-09-26T04:43:37Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:43:37.166000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "67666611-55d5-3b56-cde5-4436f1bbffad",
+            "AutoScalingGroupName": "inf-kish-code-git-gitaly",
+            "Description": "Detaching EC2 instance: i-03ce225b8caf5f13e",
+            "Cause": "At 2025-09-26T04:43:37Z instances i-02db8c87549adad3a, i-03ce225b8caf5f13e, i-0e6a4fc7e83a6ebab were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:43:37.166000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        }
+    ]
+}
+```
+
+#デタッチできたか確認 
+#デタッチがすぐできるとプロンプトの出力が返ってこない
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].[InstanceId,LifecycleState]' \
+  --output table
+--------------------------------------
+|      DescribeAutoScalingGroups     |
++----------------------+-------------+
+|  i-02db8c87549adad3a |  Detaching  |
+|  i-03ce225b8caf5f13e |  Detaching  |
+|  i-0e6a4fc7e83a6ebab |  Detaching  |
++----------------------+-------------+
+
+#インスタンスを一時停止
+aws ec2 stop-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StoppingInstances": [
+        {
+            "InstanceId": "i-03ce225b8caf5f13e",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-0e6a4fc7e83a6ebab",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-02db8c87549adad3a",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
+
+
+
+#--------------------------
+# Gitaly 起動
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export GITALY_ASG_NAME="${ENV}-${PROJECT}-git-gitaly"
+
+# 1. 停止中インスタンスIDを取得
+INSTANCE_IDS=$(aws ec2 describe-instances \
+  --filters "Name=tag:Name,Values=*git-gitaly*" "Name=instance-state-name,Values=stopped" \
+  --query 'Reservations[*].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-0e6a4fc7e83a6ebab i-02db8c87549adad3a i-03ce225b8caf5f13e
+```
+
+# 2. 停止中インスタンスを起動
+aws ec2 start-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StartingInstances": [
+        {
+            "InstanceId": "i-03ce225b8caf5f13e",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0e6a4fc7e83a6ebab",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-02db8c87549adad3a",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        }
+    ]
+}
+
+```
+
+# 3. インスタンスが running かつステータスチェック OK になるまで確認
+aws ec2 describe-instance-status \
+  --instance-ids $INSTANCE_IDS \
+  --include-all-instances \
+  --query 'InstanceStatuses[*].[InstanceId,InstanceState.Name,SystemStatus.Status,InstanceStatus.Status]' \
+  --output table
+```
+------------------------------------------------
+|            DescribeInstanceStatus            |
++----------------------+----------+-----+------+
+|  i-0e6a4fc7e83a6ebab |  running |  ok |  ok  |
+|  i-03ce225b8caf5f13e |  running |  ok |  ok  |
+|  i-02db8c87549adad3a |  running |  ok |  ok  |
++----------------------+----------+-----+------+
+```
+
+# 4. 停止中インスタンスを ASG に再アタッチ
+aws autoscaling attach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$GITALY_ASG_NAME"
+
+# 6. ASG の min/desired/max を元の 3 に戻す
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$GITALY_ASG_NAME" \
+  --min-size 3 
+
+# 7. サイズが戻ったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$GITALY_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------
+|  DescribeAutoScalingGroups |
++----------------------------+
+|  inf-kish-code-git-gitaly  |
+|  3                         |
+|  3                         |
+|  3                         |
++----------------------------+
+```
+
+
+
+###########################
+# EKS Node
+###########################
+
+#--------------------------
+# EKS Node 停止
+#--------------------------
+export ENV="inf"
+export PROJECT="kish-code"
+export EKS_CLUSTER_NAME="${ENV}-${PROJECT}-eks"
+
+# 1. EKS に紐づく NodeGroup 名を取得
+NODEGROUP_NAME=$(aws eks list-nodegroups \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --query 'nodegroups' \
+  --output text)
+echo $NODEGROUP_NAME
+```
+inf-kish-code-ng-2025092408145528510000000c
+```
+
+# 2. NodeGroup に紐づく ASG 名を取得
+NODE_ASG_NAME=$(aws eks describe-nodegroup \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --nodegroup-name "$NODEGROUP_NAME" \
+  --query 'nodegroup.resources.autoScalingGroups[0].name' \
+  --output text)
+echo $NODE_ASG_NAME
+```
+eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821
+```
+
+# 3. ASG に登録されているインスタンスIDを取得
+INSTANCE_IDS=$(aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$NODE_ASG_NAME" \
+  --query 'AutoScalingGroups[0].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-050bc6904d8e80537 i-093392a32ca33092a i-0c8966d76a1a8b4b2
+```
+
+# 4. ASG のサイズを 0 に変更（新しいインスタンス補充を防ぐ）
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --min-size 0
+
+#0になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$NODE_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------------------------------------------------------------------
+|                                DescribeAutoScalingGroups                               |
++----------------------------------------------------------------------------------------+
+|  eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821  |
+|  0                                                                                     |
+|  3                                                                                     |
+|  3                                                                                     |
++----------------------------------------------------------------------------------------+
+```
+
+# 5. インスタンスを Standby に移行
+aws autoscaling enter-standby \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "ea066611-71b4-f2b7-210e-8ecdb369dc8f",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Moving EC2 instance to Standby: i-093392a32ca33092a",
+            "Cause": "At 2025-09-26T04:51:13Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:51:13.852000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "6fb66611-71b4-f711-7af0-6a26283e48e0",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Moving EC2 instance to Standby: i-0c8966d76a1a8b4b2",
+            "Cause": "At 2025-09-26T04:51:13Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:51:13.853000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        },
+        {
+            "ActivityId": "cc366611-71b4-f471-438c-64274be8bdb8",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Moving EC2 instance to Standby: i-050bc6904d8e80537",
+            "Cause": "At 2025-09-26T04:51:13Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were moved to standby in response to a user request, shrinking the capacity from 3 to 0.",
+            "StartTime": "2025-09-26T04:51:13.853000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        }
+    ]
+}
+```
+
+# 6. Standby 状態を確認
+aws autoscaling describe-auto-scaling-instances \
+  --instance-ids $INSTANCE_IDS \
+  --query 'AutoScalingInstances[*].[InstanceId,LifecycleState]' \
+  --output table
+```
+------------------------------------
+|   DescribeAutoScalingInstances   |
++----------------------+-----------+
+|  i-050bc6904d8e80537 |  Standby  |
+|  i-093392a32ca33092a |  Standby  |
+|  i-0c8966d76a1a8b4b2 |  Standby  |
++----------------------+-----------+
+```
+
+# 7. ASG からインスタンスをデタッチ
+aws autoscaling detach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --should-decrement-desired-capacity
+```
+{
+    "Activities": [
+        {
+            "ActivityId": "2e766611-73cf-ccb4-c15b-4fd119e685b0",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Detaching EC2 instance: i-093392a32ca33092a",
+            "Cause": "At 2025-09-26T04:51:48Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:51:48.339000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0d0a90b8bbb274a25\",\"Availability Zone\":\"ap-northeast-1c\"}"
+        },
+        {
+            "ActivityId": "ad266611-73cf-cc6a-d4d5-1bad5fddca12",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Detaching EC2 instance: i-0c8966d76a1a8b4b2",
+            "Cause": "At 2025-09-26T04:51:48Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:51:48.339000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0a46e773b4586e9a8\",\"Availability Zone\":\"ap-northeast-1d\"}"
+        },
+        {
+            "ActivityId": "2ae66611-73cf-cceb-5575-4d3760c868eb",
+            "AutoScalingGroupName": "eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821",
+            "Description": "Detaching EC2 instance: i-050bc6904d8e80537",
+            "Cause": "At 2025-09-26T04:51:48Z instances i-050bc6904d8e80537, i-093392a32ca33092a, i-0c8966d76a1a8b4b2 were detached in response to a user request.",
+            "StartTime": "2025-09-26T04:51:48.339000+00:00",
+            "StatusCode": "InProgress",
+            "Progress": 50,
+            "Details": "{\"Subnet ID\":\"subnet-0089a5668fdf9a1d1\",\"Availability Zone\":\"ap-northeast-1a\"}"
+        }
+    ]
+}
+```
+
+# 8. インスタンスを停止
+aws ec2 stop-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StoppingInstances": [
+        {
+            "InstanceId": "i-0c8966d76a1a8b4b2",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-050bc6904d8e80537",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        },
+        {
+            "InstanceId": "i-093392a32ca33092a",
+            "CurrentState": {
+                "Code": 64,
+                "Name": "stopping"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
+
+#--------------------------
+# EKS Node起動
+#--------------------------
+# 1. NodeGroup 名を取得
+NODEGROUP_NAME=$(aws eks list-nodegroups \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --query 'nodegroups' \
+  --output text)
+echo $NODEGROUP_NAME
+```
+inf-kish-code-ng-2025092408145528510000000c
+```
+
+# 2. NodeGroup に紐づく ASG 名を取得
+NODE_ASG_NAME=$(aws eks describe-nodegroup \
+  --cluster-name "$EKS_CLUSTER_NAME" \
+  --nodegroup-name "$NODEGROUP_NAME" \
+  --query 'nodegroup.resources.autoScalingGroups[0].name' \
+  --output text)
+echo $NODE_ASG_NAME
+```
+eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821
+```
+
+# 3. 停止中インスタンスを検索（EKS クラスタタグで絞る）
+INSTANCE_IDS=$(aws ec2 describe-instances \
+  --filters "Name=tag:eks:cluster-name,Values=$EKS_CLUSTER_NAME" "Name=instance-state-name,Values=stopped" \
+  --query 'Reservations[*].Instances[*].InstanceId' \
+  --output text)
+echo $INSTANCE_IDS
+```
+i-050bc6904d8e80537 i-093392a32ca33092a i-0c8966d76a1a8b4b2
+```
+
+# 4. 停止していたインスタンスを起動
+aws ec2 start-instances --instance-ids $INSTANCE_IDS
+```
+{
+    "StartingInstances": [
+        {
+            "InstanceId": "i-050bc6904d8e80537",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-0c8966d76a1a8b4b2",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        },
+        {
+            "InstanceId": "i-093392a32ca33092a",
+            "CurrentState": {
+                "Code": 0,
+                "Name": "pending"
+            },
+            "PreviousState": {
+                "Code": 80,
+                "Name": "stopped"
+            }
+        }
+    ]
+}
+```
+
+# 5.インスタンスが running になるまで待つ
+aws ec2 describe-instance-status \
+  --instance-ids $INSTANCE_IDS \
+  --include-all-instances \
+  --query 'InstanceStatuses[*].[InstanceId,InstanceState.Name,SystemStatus.Status,InstanceStatus.Status]' \
+  --output table
+```
+------------------------------------------------
+|            DescribeInstanceStatus            |
++----------------------+----------+-----+------+
+|  i-093392a32ca33092a |  running |  ok |  ok  |
+|  i-050bc6904d8e80537 |  running |  ok |  ok  |
+|  i-0c8966d76a1a8b4b2 |  running |  ok |  ok  |
++----------------------+----------+-----+------+
+```
+# 6. インスタンスを ASG に再アタッチ
+aws autoscaling attach-instances \
+  --instance-ids $INSTANCE_IDS \
+  --auto-scaling-group-name "$NODE_ASG_NAME"
+
+# 7. ASG の最小サイズを元に戻す
+aws autoscaling update-auto-scaling-group \
+  --auto-scaling-group-name "$NODE_ASG_NAME" \
+  --min-size 3
+
+# 8. になったか確認
+aws autoscaling describe-auto-scaling-groups \
+  --auto-scaling-group-names "$NODE_ASG_NAME" \
+  --query 'AutoScalingGroups[0].[AutoScalingGroupName, MinSize, DesiredCapacity, MaxSize]' \
+  --output table
+```
+------------------------------------------------------------------------------------------
+|                                DescribeAutoScalingGroups                               |
++----------------------------------------------------------------------------------------+
+|  eks-inf-kish-code-ng-2025092408145528510000000c-9accbd65-1948-acf8-56e5-bea45dd6e821  |
+|  3                                                                                     |
+|  3                                                                                     |
+|  3                                                                                     |
++----------------------------------------------------------------------------------------+
+```
+
+
+
+
+###########################
+# PosgleSQL
+###########################
+Multi-AZ RDS インスタンスは、プライマリとスタンバイをまとめて停止することになります。
+停止中は自動フェイルオーバーも行われず、アプリからの接続はすべて停止します。そのため 本番トラフィックがないタイミングで実施する必要があります。
+
+#対象のRDSがマルチAZ構成かどうか確認する方法
+aws rds describe-db-instances \
+  --query 'DBInstances[*].[DBInstanceIdentifier,MultiAZ]' \
+  --output table
+-----------------------------------------
+|          DescribeDBInstances          |
++-------------------------------+-------+
+|  inf-kish-code-git-dpsq-rds   |  True |
+|  inf-kish-code-prae-dpsq-rds  |  True |
++-------------------------------+-------+
+
+#停止できるか判断 RDSの種類は「通常のRDSか」or「Aurora」か？ 
+#通常のRDS（Multi-AZ） →停止不可
+#Auroraクラスター（マルチAZ） → クラスター単位で停止可能
+#出力結果 上段 → Engin 下段 → DBClusterIdentifier 
+#AuroraならEngineは「aurora-postgresql」 DBClusterIdentifierがNone クラスターではなく「単一インスタンス」
+aws rds describe-db-instances \
+  --db-instance-identifier inf-kish-code-prae-dpsq-rds \
+  --query 'DBInstances[0].[Engine,DBInstanceIdentifier]' \
+  --output table
+---------------------------------
+|      DescribeDBInstances      |
++-------------------------------+
+|  postgres                     |
+|  inf-kish-code-prae-dpsq-rds  |
++-------------------------------+
+
+#停止前の確認
+#DBInstanceStatus が available であることを確認 マルチAZであることも確認済み (True)
+aws rds describe-db-instances \
+  --db-instance-identifier inf-kish-code-prae-dpsq-rds \
+  --query 'DBInstances[0].[DBInstanceIdentifier,DBInstanceStatus,MultiAZ]' \
+  --output table
+---------------------------------
+|      DescribeDBInstances      |
++-------------------------------+
+|  inf-kish-code-prae-dpsq-rds  |
+|  available                    |
+|  True                         |
++-------------------------------+
+
+#停止コマンド
+#停止期間は 最大 7 日間
+#Aurora クラスターや RDS クラスター型（Multi-AZクラスターデプロイ） は、単体インスタンスとは扱いが異なり、クラスター単位で停止する必要があります
+#停止すると プライマリとスタンバイの両方がまとめて停止されます 
+aws rds stop-db-instance \
+  --db-instance-identifier inf-kish-code-prae-dpsq-rds
+
+{
+    "DBInstance": {
+        "DBInstanceIdentifier": "inf-kish-code-prae-dpsq-rds",
+        "DBInstanceClass": "db.t4g.small",
+        "Engine": "postgres",
+        "DBInstanceStatus": "stopping",
+        "MasterUsername": "praefect",
+        "DBName": "gitlab",
+        "Endpoint": {
+            "Address": "inf-kish-code-prae-dpsq-rds.csxojqqrlzij.ap-northeast-1.rds.amazonaws.com",
+            "Port": 5432,
+            "HostedZoneId": "Z24O6O9L7SGTNB"
+        },
+        "AllocatedStorage": 50,
+        "InstanceCreateTime": "2025-10-01T10:08:31.799000+00:00",
+        "PreferredBackupWindow": "16:34-17:04",
+        "BackupRetentionPeriod": 35,
+        "DBSecurityGroups": [],
+        "VpcSecurityGroups": [
+            {
+                "VpcSecurityGroupId": "sg-0083b4f3169b62f46",
+                "Status": "active"
+            }
+        ],
+        "DBParameterGroups": [
+            {
+                "DBParameterGroupName": "inf-kish-code-prae-dpsq-rds-pg",
+                "ParameterApplyStatus": "in-sync"
+            }
+        ],
+        "AvailabilityZone": "ap-northeast-1c",
+        "DBSubnetGroup": {
+            "DBSubnetGroupName": "inf-kish-code-db-subnet-group",
+            "DBSubnetGroupDescription": "Managed by Terraform",
+            "VpcId": "vpc-038743010bd0a4239",
+            "SubnetGroupStatus": "Complete",
+            "Subnets": [
+                {
+                    "SubnetIdentifier": "subnet-067347cc0d145bae9",
+                    "SubnetAvailabilityZone": {
+                        "Name": "ap-northeast-1a"
+                    },
+                    "SubnetOutpost": {},
+                    "SubnetStatus": "Active"
+                },
+                {
+                    "SubnetIdentifier": "subnet-0efe09732533b6eec",
+                    "SubnetAvailabilityZone": {
+                        "Name": "ap-northeast-1d"
+                    },
+                    "SubnetOutpost": {},
+                    "SubnetStatus": "Active"
+                },
+                {
+                    "SubnetIdentifier": "subnet-07fba6f2fa6e10fa0",
+                    "SubnetAvailabilityZone": {
+                        "Name": "ap-northeast-1c"
+                    },
+                    "SubnetOutpost": {},
+                    "SubnetStatus": "Active"
+                }
+            ]
+        },
+        "PreferredMaintenanceWindow": "sun:18:56-sun:19:26",
+        "PendingModifiedValues": {},
+        "LatestRestorableTime": "2025-10-01T10:53:53+00:00",
+        "MultiAZ": true,
+        "EngineVersion": "14.19",
+        "AutoMinorVersionUpgrade": false,
+        "ReadReplicaDBInstanceIdentifiers": [],
+        "LicenseModel": "postgresql-license",
+        "Iops": 3000,
+        "OptionGroupMemberships": [
+            {
+                "OptionGroupName": "default:postgres-14",
+                "Status": "in-sync"
+            }
+        ],
+        "SecondaryAvailabilityZone": "ap-northeast-1d",
+        "PubliclyAccessible": false,
+        "StorageType": "gp3",
+        "DbInstancePort": 0,
+        "StorageEncrypted": true,
+        "KmsKeyId": "arn:aws:kms:ap-northeast-1:405501939914:key/56cffe38-0348-45e1-910f-b1ca672303ba",
+        "DbiResourceId": "db-U72376RFKF3B5JX2SMWH333Z7M",
+        "CACertificateIdentifier": "rds-ca-rsa2048-g1",
+        "DomainMemberships": [],
+        "CopyTagsToSnapshot": false,
+        "MonitoringInterval": 0,
+        "MonitoringRoleArn": "arn:aws:iam::405501939914:role/inf-kish-code-monitoring-rds-role",
+        "DBInstanceArn": "arn:aws:rds:ap-northeast-1:405501939914:db:inf-kish-code-prae-dpsq-rds",
+        "IAMDatabaseAuthenticationEnabled": false,
+        "DatabaseInsightsMode": "standard",
+        "PerformanceInsightsEnabled": true,
+        "PerformanceInsightsKMSKeyId": "arn:aws:kms:ap-northeast-1:405501939914:key/56cffe38-0348-45e1-910f-b1ca672303ba",
+        "PerformanceInsightsRetentionPeriod": 7,
+        "DeletionProtection": false,
+        "AssociatedRoles": [],
+        "MaxAllocatedStorage": 100,
+        "TagList": [
+            {
+                "Key": "env",
+                "Value": "inf"
+            },
+            {
+                "Key": "project",
+                "Value": "kish-code"
+            },
+            {
+                "Key": "prefix",
+                "Value": "inf-kish-code"
+            }
+        ],
+        "CustomerOwnedIpEnabled": false,
+        "BackupTarget": "region",
+        "NetworkType": "IPV4",
+        "StorageThroughput": 125,
+        "CertificateDetails": {
+            "CAIdentifier": "rds-ca-rsa2048-g1",
+            "ValidTill": "2026-10-01T10:06:40+00:00"
+        },
+        "DedicatedLogVolume": false,
+        "EngineLifecycleSupport": "open-source-rds-extended-support"
+    }
+}
+
+
+#停止状態の確認
+aws rds describe-db-instances \
+  --db-instance-identifier inf-kish-code-prae-dpsq-rds \
+  --query 'DBInstances[0].[DBInstanceIdentifier,DBInstanceStatus]' \
+  --output table
+
+
+#起動
+aws rds start-db-instance \
+  --db-instance-identifier inf-kish-code-prae-dpsq-rds
+
+"KmsKeyId": "arn:aws:kms:ap-northeast-1:405501939914:key/56cffe38-0348-45e1-910f-b1ca672303ba",
+        "DbiResourceId": "db-U72376RFKF3B5JX2SMWH333Z7M",
+        "CACertificateIdentifier": "rds-ca-rsa2048-g1",
+        "DomainMemberships": [],
+        "CopyTagsToSnapshot": false,
+        "MonitoringInterval": 0,
+        "MonitoringRoleArn": "arn:aws:iam::405501939914:role/inf-kish-code-monitoring-rds-role",
+        "DBInstanceArn": "arn:aws:rds:ap-northeast-1:405501939914:db:inf-kish-code-prae-dpsq-rds",
+        "IAMDatabaseAuthenticationEnabled": false,
+        "DatabaseInsightsMode": "standard",
+        "PerformanceInsightsEnabled": true,
+        "PerformanceInsightsKMSKeyId": "arn:aws:kms:ap-northeast-1:405501939914:key/56cffe38-0348-45e1-910f-b1ca672303ba",
+        "PerformanceInsightsRetentionPeriod": 7,
+        "DeletionProtection": false,
+        "AssociatedRoles": [],
+        "MaxAllocatedStorage": 100,
+        "TagList": [
+            {
+                "Key": "env",
+                "Value": "inf"
+            },
+            {
+                "Key": "project",
+                "Value": "kish-code"
+            },
+            {
+                "Key": "prefix",
+                "Value": "inf-kish-code"
+            }
+        ],
+        "CustomerOwnedIpEnabled": false,
+        "BackupTarget": "region",
+        "NetworkType": "IPV4",
+        "StorageThroughput": 125,
+        "CertificateDetails": {
+            "CAIdentifier": "rds-ca-rsa2048-g1",
+            "ValidTill": "2026-10-01T10:06:40+00:00"
+        },
+        "DedicatedLogVolume": false,
+        "EngineLifecycleSupport": "open-source-rds-extended-support"
+    }
+}
+
+
+#起動状態の確認
+aws rds describe-db-instances \
+  --db-instance-identifier inf-kish-code-prae-dpsq-rds \
+  --query 'DBInstances[0].[DBInstanceIdentifier,DBInstanceStatus,MultiAZ]' \
+  --output table
+
+
+
+
+
+
+■停止手順
+praefect → gitaly → praefect DB
+
+■起動手順
+praefect DB → gitaly → praefect
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+###########################
+# 障害復旧
+###########################
+
+2. backup
+export ENV="inf"
+export PROJECT="kish-code"
+export CLUSTER_NAME="${ENV}-${PROJECT}-eks"
+
+aws eks update-kubeconfig --name ${CLUSTER_NAME} \
+  --role arn:aws:iam::405501939914:role/inf-kish-code-eks-shell-role
+
+CLUSTER_ARN=$(aws eks describe-cluster --name ${CLUSTER_NAME} \
+  --query cluster.arn \
+  --output text)
+echo CLUSTER_ARN=$CLUSTER_ARN
+
+kubectl config set-context $CLUSTER_ARN
+kubectl config current-context
+Updated context arn:aws:eks:ap-northeast-1:405501939914:cluster/inf-kish-code-eks in C:\Users\tanaka\.kube\config
+CLUSTER_ARN=arn:aws:eks:ap-northeast-1:405501939914:cluster/inf-kish-code-eks
+Context "arn:aws:eks:ap-northeast-1:405501939914:cluster/inf-kish-code-eks" modified.
+arn:aws:eks:ap-northeast-1:405501939914:cluster/inf-kish-code-eks
+
+kubectl exec -n gitlab -it -c toolbox $(kubectl get po -n gitlab -l='app=toolbox,!job-name' -o jsonpath='{.items[].metadata.name}') \
+  -- \
+  backup-utility \
+  --skip registry,uploads,artifacts,lfs,packages,external_diffs,terraform_state,ci_secure_files | tee -a GITLAB_BACKUP_TEST.log
+
+
+
+3. primaryの分散状況をログ
+# 実行するSQL文：各ノードで、Primaryノードになっているプロジェクト数の一覧（wiki,pool,snippet以外）
+SQL_COMMAND="SELECT repo.primary, COUNT(*) FROM repositories AS repo WHERE repo.relative_path LIKE '@hashed%' AND repo.relative_path NOT LIKE '%.wiki.git' GROUP BY repo.primary ORDER BY repo.primary;"
+echo ${SQL_COMMAND}
+
+# Praefectサーバ内蔵のPostgresqlクライアントを実行（Praefect用のDBに対してSQLを実行）
+PGPASSWORD="KYuPqyHDENbcFiqpMM2G" /opt/gitlab/embedded/bin/psql -h "inf-kish-code-prae-dpsq-rds.csxojqqrlzij.ap-northeast-1.rds.amazonaws.com" -U praefect -d gitlab -c "${SQL_COMMAND}"
+
+primary | count
+---------+-------
+ gtlc-0  |     6
+ gtlc-1  |     2
+ gtlc-2  |     2
+(3 rows)
+
+
+
+4. リストア
+export RESTORE_TAR_PREFIX="1758255131_2025_09_19_16.6.1-ee"
+
+kubectl exec -n gitlab -it -c toolbox $(kubectl get po -n gitlab -l='app=toolbox,!job-name' -o jsonpath='{.items[].metadata.name}') \
+  -- env force=yes backup-utility \
+  --restore \
+  -f $RESTORE_TAR_PREFIX | tee -a GITLAB_RESTORE.log
+
+primary | count
+---------+-------
+ gtlc-0  |     6
+ gtlc-1  |     2
+ gtlc-2  |     2
+(3 rows)
+
+
+
+5. インスタンスを一台落とす ※障害発生
+GITALY_NAME=inf-kish-code-git-gitaly
+GITALY_INSTANCES_JSON=$(aws ec2 describe-instances \
+  --filters "Name=tag-key,Values=Name" \
+            "Name=tag-value,Values=$GITALY_NAME" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].{InstanceId:InstanceId, PrivateIpAddress:PrivateIpAddress}' \
+  --output json | jq '@json')
+echo $GITALY_INSTANCES_JSON | jq '. | fromjson'
+```
+[
+  {
+    "InstanceId": "i-05b0497634f1bd7cf",
+    "PrivateIpAddress": "10.0.1.86"
+  },
+  {
+    "InstanceId": "i-0bcd1dad4819fc4ea",
+    "PrivateIpAddress": "10.0.2.90"
+  },
+  {
+    "InstanceId": "i-07405cc006777b374",
+    "PrivateIpAddress": "10.0.3.222"
+  }
+]
+```
+
+GITALY_INSTANCE_ID_0=$(echo $GITALY_INSTANCES_JSON | jq '. | fromjson' | jq -r '.[0].InstanceId')
+GITALY_INSTANCE_ID_1=$(echo $GITALY_INSTANCES_JSON | jq '. | fromjson' | jq -r '.[1].InstanceId')
+GITALY_INSTANCE_ID_2=$(echo $GITALY_INSTANCES_JSON | jq '. | fromjson' | jq -r '.[2].InstanceId')
+
+echo GITALY_INSTANCE_ID_0=$GITALY_INSTANCE_ID_0 | tee -a GITALY_VAR.env
+echo GITALY_INSTANCE_ID_1=$GITALY_INSTANCE_ID_1 | tee -a GITALY_VAR.env
+echo GITALY_INSTANCE_ID_2=$GITALY_INSTANCE_ID_2 | tee -a GITALY_VAR.env
+```
+GITALY_INSTANCE_ID_0=i-05b0497634f1bd7cf
+GITALY_INSTANCE_ID_1=i-0bcd1dad4819fc4ea
+GITALY_INSTANCE_ID_2=i-07405cc006777b374
+```
+
+TERMINATE_INSTANCE_ID=$GITALY_INSTANCE_ID_0
+echo TERMINATE_INSTANCE_ID=$TERMINATE_INSTANCE_ID
+```
+TERMINATE_INSTANCE_ID=i-05b0497634f1bd7cf
+```
+
+aws ec2 terminate-instances --instance-ids $TERMINATE_INSTANCE_ID
+```
+{
+    "TerminatingInstances": [
+        {
+            "InstanceId": "i-05b0497634f1bd7cf",
+            "CurrentState": {
+                "Code": 32,
+                "Name": "shutting-down"
+            },
+            "PreviousState": {
+                "Code": 16,
+                "Name": "running"
+            }
+        }
+    ]
+}
+```
+
+
+
+6. 1で作成したプロジェクトのファイルにコミットしてみる
+	test1_shutdown_01 test2_shutdown_01 test3_shutdown_01......
+
+
+
+7.primaryの分散状況をログ ※Praefect インスタンス内で実行（SBの手順は違う）
+# 実行するSQL文：各ノードで、Primaryノードになっているプロジェクト数の一覧（wiki,pool,snippet以外）
+SQL_COMMAND="SELECT repo.primary, COUNT(*) FROM repositories AS repo WHERE repo.relative_path LIKE '@hashed%' AND repo.relative_path NOT LIKE '%.wiki.git' GROUP BY repo.primary ORDER BY repo.primary;"
+echo ${SQL_COMMAND}
+
+# Praefectサーバ内蔵のPostgresqlクライアントを実行（Praefect用のDBに対してSQLを実行）
+PGPASSWORD="KYuPqyHDENbcFiqpMM2G" /opt/gitlab/embedded/bin/psql -h "inf-kish-code-prae-dpsq-rds.csxojqqrlzij.ap-northeast-1.rds.amazonaws.com" -U praefect -d gitlab -c "${SQL_COMMAND}"
+
+ primary | count
+---------+-------
+ gtlc-1  |     6
+ gtlc-2  |     4
+(2 rows)
+
+
+
+8. 新規Gitalyノード（自動起動されたinstance）確認
+#障害発生後にAutoScaleGroup内で、新規に起動したGitalyノードを発見（起動日時が最新のinstance）
+GITALY_NAME=inf-kish-code-git-gitaly
+GITALY_INSTANCES_JSON=$(aws ec2 describe-instances \
+  --filters "Name=tag-key,Values=Name" \
+            "Name=tag-value,Values=$GITALY_NAME" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].{InstanceId:InstanceId, PrivateIpAddress:PrivateIpAddress}' \
+  --output json | jq '@json')
+echo $GITALY_INSTANCES_JSON | jq '. | fromjson'
+```
+[
+  {
+    "InstanceId": "i-0e21bf4f343895907",
+    "PrivateIpAddress": "10.0.1.5"
+  },
+  {
+    "InstanceId": "i-0bcd1dad4819fc4ea",
+    "PrivateIpAddress": "10.0.2.90"
+  },
+  {
+    "InstanceId": "i-07405cc006777b374",
+    "PrivateIpAddress": "10.0.3.222"
+  }
+]
+```
+
+NEW_GITALY_INSTANCE_ID="i-XXXXXXXXXXXXXXXXXXX"
+NEW_GITALY_INSTANCE_ID="i-0d4442a53b699cf5e"
+
+echo NEW_GITALY_INSTANCE_ID=$NEW_GITALY_INSTANCE_ID | tee -a GITALY_VAR.env
+```
+NEW_GITALY_INSTANCE_ID=i-0e21bf4f343895907
+```
+
+NEW_GITALY_INSTANCES_JSON=$(aws ec2 describe-instances \
+  --instance-ids $NEW_GITALY_INSTANCE_ID \
+  --query 'Reservations[0].Instances[0].{InstanceId:InstanceId, PrivateIpAddress:PrivateIpAddress}' \
+  --output json | jq '@json')
+echo $NEW_GITALY_INSTANCES_JSON | jq '. | fromjson'
+```
+{
+  "InstanceId": "i-0e21bf4f343895907",
+  "PrivateIpAddress": "10.0.1.5"
+}
+```
+
+
+NEW_GITALY_INSTANCE_IP=$(echo $NEW_GITALY_INSTANCES_JSON | jq '. | fromjson' | jq -r .PrivateIpAddress)
+echo NEW_GITALY_INSTANCE_IP=$NEW_GITALY_INSTANCE_IP | tee -a GITALY_VAR.env
+```
+NEW_GITALY_INSTANCE_IP=10.0.1.5
+```
+
+ssh -i ../opsman-dev.pem vcap@NEW_GITALY_INSTANCE_IP
+sudo tail -f /var/log/cloud-init-output.log or less /var/log/cloud-init-output.log
+```
+gitlab Reconfigured!
+run: gitaly: (pid 7001) 17s; run: log: (pid 6541) 42s
+run: gitlab-exporter: (pid 6925) 20s; run: log: (pid 6804) 27s
+run: logrotate: (pid 6508) 49s; run: log: (pid 6521) 46s
+run: node-exporter: (pid 6915) 21s; run: log: (pid 6701) 33s
+run: prometheus: (pid 6937) 20s; run: log: (pid 6877) 23s
+COMMAND  PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+gitaly  7007  git    9u  IPv6  35356      0t0  TCP *:8075 (LISTEN)
+gitaly  7007  git   10u  IPv6  35356      0t0  TCP *:8075 (LISTEN)
+ci-info: no authorized ssh keys fingerprints found for user ec2-user.
+Cloud-init v. 19.3-46.amzn2.0.7 finished at Wed, 17 Sep 2025 05:22:42 +0000. Datasource DataSourceEc2.  Up 258.84 seconds
+```
+
+
+9. 複製ノードチェックサム検証（）Praefect
+#PRAEFECTサーバのIPアドレスを取得
+PRAEFECT_NAME="inf-kish-code-git-praefect"
+PRAEFECT_INSTANCES_JSON=$(aws ec2 describe-instances \
+  --filters "Name=tag-key,Values=Name" \
+            "Name=tag-value,Values=$PRAEFECT_NAME" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[0].{InstanceId:InstanceId, PrivateIpAddress:PrivateIpAddress}' \
+  --output json | jq '@json')
+echo $PRAEFECT_INSTANCES_JSON | jq '. | fromjson'
+
+PRAEFECT_INSTANCE_IP=$(echo $PRAEFECT_INSTANCES_JSON | jq '. | fromjson' | jq -r '.[0].PrivateIpAddress')
+echo PRAEFECT_INSTANCE_IP=$PRAEFECT_INSTANCE_IP | tee -a GITALY_VAR_ENV.env
+
+# 実行するSQL文：GitLabのプロジェクトの一覧
+SQL_COMMAND="SELECT id FROM projects ORDER BY id"
+echo ${SQL_COMMAND}
+
+# Praefectサーバ内蔵のPostgresqlクライアントを実行（Praefect用のDBに対してSQLを実行）
+PGPASSWORD="Eb5nSt2fjnyB7d3m8FmJ" /opt/gitlab/embedded/bin/psql -h "inf-kish-code-git-dpsq-rds.csxojqqrlzij.ap-northeast-1.rds.amazonaws.com" -U gitlab -d gitlab -t -c "${SQL_COMMAND}"
+
+PROJECT_ID_JSON=$(PGPASSWORD="Eb5nSt2fjnyB7d3m8FmJ" /opt/gitlab/embedded/bin/psql -h "inf-kish-code-git-dpsq-rds.csxojqqrlzij.ap-northeast-1.rds.amazonaws.com" -U gitlab -d gitlab -t -c "${SQL_COMMAND}")
+
+#gitプロジェクト数を確認
+PROJECT_LENGTH=$(echo $PROJECT_ID_JSON | jq -s | jq '.|length')
+PROJECT_LENGTH=$(echo "$PROJECT_ID_JSON" | jq -s 'length')
+echo PROJECT_LENGTH=${PROJECT_LENGTH}
+
+#実行するコマンドを格納する変数 COMMAND を空で準備。
+#プロジェクト ID を取り出してコマンド生成
+#$PROJECT_LENGTH 回ループし、$PROJECT_ID_JSON から jq でプロジェクトIDを取り出す。
+#COMMAND にどんどん追記（\n で改行付き）。
+ → つまり、最終的に複数の gitlab-rake gitlab:praefect:replicas[...] コマンドのリストができる。
+COMMAND=""
+for ((i=0 ; i< $PROJECT_LENGTH ; i++)); do
+ PROJECT_ID=$(echo $PROJECT_ID_JSON | jq -s | jq -r .[$i])
+ COMMAND+="gitlab-rake gitlab:praefect:replicas[$PROJECT_ID]\n"
+done
+echo $COMMAND
+```
+gitlab-rake gitlab:praefect:replicas[1]\ngitlab-rake gitlab:praefect:replicas[2]\ngitlab-rake gitlab:praefect:replicas[3]\ngitlab-rake gitlab:praefect:replicas[4]\ngitlab-rake gitlab:praefect:replicas[5]\ngitlab-rake gitlab:praefect:replicas[6]\ngitlab-rake gitlab:praefect:replicas[7]\ngitlab-rake gitlab:praefect:replicas[8]\ngitlab-rake gitlab:praefect:replicas[9]\ngitlab-rake gitlab:praefect:replicas[10]\n
+```
+
+COMMAND=""
+for ((i=0 ; i< $PROJECT_LENGTH ; i++)); do
+  PROJECT_ID=$(echo "$PROJECT_ID_JSON" | jq -s -r ".[$i]")
+  COMMAND+="gitlab-rake gitlab:praefect:replicas[$PROJECT_ID]\n"
+done
+echo -e "$COMMAND"
+
+COMMAND="gitlab-rake gitlab:praefect:replicas[1] gitlab-rake gitlab:praefect:replicas[2] gitlab-rake gitlab:praefect:replicas[3] gitlab-rake gitlab:praefect:replicas[4] gitlab-rake gitlab:praefect:replicas[5] gitlab-rake gitlab:praefect:replicas[6] gitlab-rake gitlab:praefect:replicas[7] gitlab-rake gitlab:praefect:replicas[8] gitlab-rake gitlab:praefect:replicas[9] gitlab-rake gitlab:praefect:replicas[10] gitlab-rake gitlab:praefect:replicas[11] gitlab-rake gitlab:praefect:replicas[12] gitlab-rake gitlab:praefect:replicas[13] gitlab-rake gitlab:praefect:replicas[14] gitlab-rake gitlab:praefect:replicas[15] gitlab-rake gitlab:praefect:replicas[16] gitlab-rake gitlab:praefect:replicas[17] gitlab-rake gitlab:praefect:replicas[18] gitlab-rake gitlab:praefect:replicas[19] gitlab-rake gitlab:praefect:replicas[20] gitlab-rake gitlab:praefect:replicas[21] gitlab-rake gitlab:praefect:replicas[22] gitlab-rake gitlab:praefect:replicas[23] gitlab-rake gitlab:praefect:replicas[24] gitlab-rake gitlab:praefect:replicas[25] gitlab-rake gitlab:praefect:replicas[26] gitlab-rake gitlab:praefect:replicas[27] gitlab-rake gitlab:praefect:replicas[28] gitlab-rake gitlab:praefect:replicas[29] gitlab-rake gitlab:praefect:replicas[30] gitlab-rake gitlab:praefect:replicas[31] gitlab-rake gitlab:praefect:replicas[32] gitlab-rake gitlab:praefect:replicas[33] gitlab-rake gitlab:praefect:replicas[34] gitlab-rake gitlab:praefect:replicas[35] gitlab-rake gitlab:praefect:replicas[36] gitlab-rake gitlab:praefect:replicas[37] gitlab-rake gitlab:praefect:replicas[38] gitlab-rake gitlab:praefect:replicas[39] gitlab-rake gitlab:praefect:replicas[40] gitlab-rake gitlab:praefect:replicas[41] gitlab-rake gitlab:praefect:replicas[42] gitlab-rake gitlab:praefect:replicas[43] gitlab-rake gitlab:praefect:replicas[44] gitlab-rake gitlab:praefect:replicas[45] gitlab-rake gitlab:praefect:replicas[46] gitlab-rake gitlab:praefect:replicas[47] gitlab-rake gitlab:praefect:replicas[48] gitlab-rake gitlab:praefect:replicas[49] gitlab-rake gitlab:praefect:replicas[50] gitlab-rake gitlab:praefect:replicas[51] gitlab-rake gitlab:praefect:replicas[52] gitlab-rake gitlab:praefect:replicas[53] gitlab-rake gitlab:praefect:replicas[54] gitlab-rake gitlab:praefect:replicas[55] gitlab-rake gitlab:praefect:replicas[56] gitlab-rake gitlab:praefect:replicas[57] gitlab-rake gitlab:praefect:replicas[58] gitlab-rake gitlab:praefect:replicas[59] gitlab-rake gitlab:praefect:replicas[60] gitlab-rake gitlab:praefect:replicas[61] gitlab-rake gitlab:praefect:replicas[62] gitlab-rake gitlab:praefect:replicas[63] gitlab-rake gitlab:praefect:replicas[64] gitlab-rake gitlab:praefect:replicas[65] gitlab-rake gitlab:praefect:replicas[66] gitlab-rake gitlab:praefect:replicas[67] gitlab-rake gitlab:praefect:replicas[68] gitlab-rake gitlab:praefect:replicas[69] gitlab-rake gitlab:praefect:replicas[70] gitlab-rake gitlab:praefect:replicas[71] gitlab-rake gitlab:praefect:replicas[72] gitlab-rake gitlab:praefect:replicas[73] gitlab-rake gitlab:praefect:replicas[74] gitlab-rake gitlab:praefect:replicas[75] gitlab-rake gitlab:praefect:replicas[76] gitlab-rake gitlab:praefect:replicas[77] gitlab-rake gitlab:praefect:replicas[78] gitlab-rake gitlab:praefect:replicas[79] gitlab-rake gitlab:praefect:replicas[80] gitlab-rake gitlab:praefect:replicas[81] gitlab-rake gitlab:praefect:replicas[82] gitlab-rake gitlab:praefect:replicas[83] gitlab-rake gitlab:praefect:replicas[84] gitlab-rake gitlab:praefect:replicas[85] gitlab-rake gitlab:praefect:replicas[86] gitlab-rake gitlab:praefect:replicas[87] gitlab-rake gitlab:praefect:replicas[88] gitlab-rake gitlab:praefect:replicas[89] gitlab-rake gitlab:praefect:replicas[90] gitlab-rake gitlab:praefect:replicas[91] gitlab-rake gitlab:praefect:replicas[92] gitlab-rake gitlab:praefect:replicas[93] gitlab-rake gitlab:praefect:replicas[94] gitlab-rake gitlab:praefect:replicas[95] gitlab-rake gitlab:praefect:replicas[96] gitlab-rake gitlab:praefect:replicas[97] gitlab-rake gitlab:praefect:replicas[98] gitlab-rake gitlab:praefect:replicas[99] gitlab-rake gitlab:praefect:replicas[100] gitlab-rake gitlab:praefect:replicas[101] gitlab-rake gitlab:praefect:replicas[102] gitlab-rake gitlab:praefect:replicas[103]"
+
+
+
+
+
+#Kubernetes 上の GitLab toolbox Pod の中に入り、COMMAND に溜めた複数の gitlab-rake をまとめて実行する。
+#gitlab:praefect:replicas は、Gitaly Cluster のレプリカ状況（どのストレージにどのプロジェクトが複製されているか）を確認する Rake タスク。
+#.ログ出力
+(kubectl exec -n gitlab -it -c toolbox $(kubectl get po -n gitlab -l='app=toolbox,!job-name' -o jsonpath='{.items[].metadata.name}') -- bash << EOF
+ $(echo -e $COMMAND)
+EOF
+) | tee -a GITALY_NODE_CHECKSUM.log
+```
+Unable to use a TTY - input is not a terminal or the right kind of file
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+Something went wrong when getting replicas.
+```
+
+kubectl exec -n gitlab -i -c toolbox \
+$(kubectl get po -n gitlab -l='app=toolbox,!job-name' -o jsonpath='{.items[0].metadata.name}') \
+-- bash << EOF
+$(echo -e "$COMMAND")
+EOF
+
+
+
+10. Primaryノードの交代（Secondary昇格）
+#PraefectサーバのIPアドレスを取得（Praefectサーバの中の1台選出）
+PRAEFECT_NAME="inf-kish-code-git-praefect"
+PRAEFECT_INSTANCES_JSON=$(aws ec2 describe-instances \
+  --filters "Name=tag-key,Values=Name" \
+            "Name=tag-value,Values=$PRAEFECT_NAME" \
+            "Name=instance-state-name,Values=running" \
+  --query 'Reservations[].Instances[].{InstanceId:InstanceId, PrivateIpAddress:PrivateIpAddress}' \
+  --output json | jq '@json')
+echo $PRAEFECT_INSTANCES_JSON | jq '. | fromjson'
+
+PRAEFECT_INSTANCE_IP=$(echo $PRAEFECT_INSTANCES_JSON | jq '. | fromjson' | jq -r .PrivateIpAddress)
+echo PRAEFECT_INSTANCE_IP=$PRAEFECT_INSTANCE_IP | tee -a GITALY_VAR.env
+
+ssh -i ../opsman-dev.pem vcap@PRAEFECT_INSTANCE_IP
+sudo tail -f /var/log/gitlab/praefect/current
+```
+{"level":"warning","msg":"[core] [Channel #1 SubChannel #2] grpc: addrConn.createTransport failed to connect to {Addr: \"gtlc-0.inf.hogegecasa.com:8075\", ServerName: \"gtlc-0.inf.hogegecasa.com:8075\", }. Err:connection error: desc = \"transport: Error while dialing: dial tcp 10.0.1.124:8075: i/o timeout\"","pid":3617,"system":"system","time":"2025-09-25T01:10:51.237Z"}
+{"component":"HealthManager","correlation_id":"01K5Z6RMBMX58ZK7AZYJVSC7S8","error":"rpc error: code = Unavailable desc = last connection error: connection error: desc = \"transport: Error while dialing: dial tcp 10.0.1.124:8075: i/o timeout\"","level":"error","msg":"failed checking node health","pid":3617,"storage":"gtlc-0","time":"2025-09-25T01:10:52.020Z","virtual_storage":"default"}
+{"component":"HealthManager","correlation_id":"01K5Z6RNB28W0P9FRGN88DFAN6","error":"rpc error: code = Unavailable desc = last connection error: connection error: desc = \"transport: Error while dialing: dial tcp 10.0.1.124:8075: i/o timeout\"","level":"error","msg":"failed checking node health","pid":3617,"storage":"gtlc-0","time":"2025-09-25T01:10:53.026Z","virtual_storage":"default"}
+```
+
+
+11. 障害Gitalyノードの復旧
+#GitalyのDNSプライベートゾーン情報取得
+DNS_NAME="inf.hogegecasa.com"
+PRIVATE_HOST_ZONE_JSON=$(aws route53 list-hosted-zones-by-name \
+  --dns-name $DNS_NAME \
+  --query 'HostedZones[].{Id:Id, Name:Name, PrivateZone:Config.PrivateZone}' \
+  --output json | jq '.[] | select(.PrivateZone == true)' | jq '@json')
+echo $PRIVATE_HOST_ZONE_JSON | jq '. | fromjson'
+```
+{
+  "Id": "/hostedzone/Z020583117HJMN3AA5HVO",
+  "Name": "inf.hogegecasa.com.",
+  "PrivateZone": true
+}
+```
+
+PRIVATE_HOST_ZONE_ID=$(echo $PRIVATE_HOST_ZONE_JSON | jq '. | fromjson' | jq -r .Id)
+PRIVATE_HOST_ZONE_NAME=$(echo $PRIVATE_HOST_ZONE_JSON | jq '. | fromjson' | jq -r .Name)
+echo PRIVATE_HOST_ZONE_ID=$PRIVATE_HOST_ZONE_ID | tee -a GITALY_VAR_ENV.env
+echo PRIVATE_HOST_ZONE_NAME=$PRIVATE_HOST_ZONE_NAME | tee -a GITALY_VAR_ENV.env
+```
+PRIVATE_HOST_ZONE_ID=/hostedzone/Z020583117HJMN3AA5HVO
+PRIVATE_HOST_ZONE_NAME=inf.hogegecasa.com.
+```
+
+#損失したGitalyのDNSレコード名を指定
+NEW_GITALY_INSTANCE_IP=10.0.1.148
+
+UPDATE_GITAY_RECORD_NAME="gtlc-X"
+UPDATE_GITAY_RECORD_NAME="gtlc-0"
+GITALY_RECORD_BATCH_JSON=$(cat <<EOF
+{
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "${UPDATE_GITAY_RECORD_NAME}.${PRIVATE_HOST_ZONE_NAME}",
+        "Type": "A",
+        "TTL": 300,
+        "ResourceRecords": [
+          {
+            "Value": "$NEW_GITALY_INSTANCE_IP"
+          }
+        ]
+      }
+    }
+  ]
+}
+EOF
+)
+echo $GITALY_RECORD_BATCH_JSON | jq .
+```
+{
+  "Changes": [
+    {
+      "Action": "UPSERT",
+      "ResourceRecordSet": {
+        "Name": "gtlc-0.inf.hogegecasa.com.",
+        "Type": "A",
+        "TTL": 300,
+        "ResourceRecords": [
+          {
+            "Value": "10.0.1.5"
+          }
+        ]
+      }
+    }
+  ]
+}
+```
+
+#削除する前のDNSレコードを確認
+aws route53 list-resource-record-sets \
+  --hosted-zone-id $PRIVATE_HOST_ZONE_ID \
+  --query "ResourceRecordSets[?contains(Name, \`${UPDATE_GITAY_RECORD_NAME}\`)].{Name:Name, IP:ResourceRecords[0].Value}"
+```
+[
+    {
+        "Name": "gtlc-0.inf.hogegecasa.com.",
+        "IP": "10.0.1.86"
+    }
+]
+```
+
+#DNSレコード削除実行
+aws route53 change-resource-record-sets \
+  --hosted-zone-id $PRIVATE_HOST_ZONE_ID \
+  --change-batch "$GITALY_RECORD_BATCH_JSON"
+```
+{
+    "ChangeInfo": {
+        "Id": "/change/C04329573KORQ27LZUINT",
+        "Status": "PENDING",
+        "SubmittedAt": "2025-09-17T09:41:35.457000+00:00"
+    }
+}
+```
+
+#削除した後のレコードの確認
+aws route53 list-resource-record-sets \
+  --hosted-zone-id $PRIVATE_HOST_ZONE_ID \
+  --query "ResourceRecordSets[?contains(Name, \`${UPDATE_GITAY_RECORD_NAME}\`)].{Name:Name, IP:ResourceRecords[0].Value}"
+```
+[
+    {
+        "Name": "gtlc-0.inf.hogegecasa.com.",
+        "IP": "10.0.1.5"
+    }
+]
+```
+
+#DNSレコードの確認
+nslookup "${UPDATE_GITAY_RECORD_NAME}.${PRIVATE_HOST_ZONE_NAME}"
+```
+Server:         10.0.0.2
+Address:        10.0.0.2#53
+
+Non-authoritative answer:
+Name:   gtlc-0.inf.hogegecasa.com
+Address: 10.0.1.5
+```
+
+#交代させるGitalyノード（損失したGitaly）のDNSレコード名を指定
+UPDATE_GITAY_RECORD_NAME="gtlc-X"
+UPDATE_GITAY_RECORD_NAME="gtlc-0"
+
+#損失したストレージ（Gitalyノード）に絞って調査のフラグを設定するコマンドを実行
+#指定した物理ストレージ ($UPDATE_GITAY_RECORD_NAME＝gtlc-0) 上の 20 個のリポジトリレプリカが unverified にマークされたことを示しています。これにより Praefect はこれらのレプリカを 再検証（reverification） するようになります
+sudo /opt/gitlab/embedded/bin/praefect \
+  --config /var/opt/gitlab/praefect/config.toml \
+  verify \
+  --virtual-storage=default \
+  --storage "$UPDATE_GITAY_RECORD_NAME"
+```
+20 replicas marked unverified
+```
+
+#全ストレージ（Gitalyノード）に対して調査のフラグを設定するコマンドを実行
+#この仮想ストレージに紐づく全ての物理ストレージ上のレプリカを対象に unverified マークを付けた
+sudo /opt/gitlab/embedded/bin/praefect -config /var/opt/gitlab/praefect/config.toml verify --virtual-storage=default
+```
+60 replicas marked unverified
+```
+
+#praefect dataloss は Gitaly Cluster のリポジトリ複製の健全性チェック を行うコマンド。
+#--partially-unavailable を付けると「一部のストレージが遅れている」状態も見える。
+#出力では gtlc-0 がほぼすべてのリポジトリで遅延・unhealthy なので、
+#→ ノード gtlc-0 の復旧 or 同期再実行（gitlab-rake gitlab:praefect:replicas[...]）が必要。
+sudo /opt/gitlab/embedded/bin/praefect -config /var/opt/gitlab/praefect/config.toml dataloss --virtual-storage=default --partially-unavailable
+```
+Virtual storage: default
+  All repositories are fully available on all assigned storages!
+```
+
+
+
+12. 複製ノードチェックサム検証（）
+COMMAND="gitlab-rake gitlab:praefect:replicas[1]\ngitlab-rake gitlab:praefect:replicas[2]\ngitlab-rake gitlab:praefect:replicas[3]\ngitlab-rake gitlab:praefect:replicas[4]\ngitlab-rake gitlab:praefect:replicas[5]\ngitlab-rake gitlab:praefect:replicas[6]\ngitlab-rake gitlab:praefect:replicas[7]\ngitlab-rake gitlab:praefect:replicas[8]\ngitlab-rake gitlab:praefect:replicas[9]\ngitlab-rake gitlab:praefect:replicas[10]\n"
+
+#Kubernetes 上の GitLab toolbox Pod の中に入り、COMMAND に溜めた複数の gitlab-rake をまとめて実行する。
+#gitlab:praefect:replicas は、Gitaly Cluster のレプリカ状況（どのストレージにどのプロジェクトが複製されているか）を確認する Rake タスク。
+#.ログ出力
+(kubectl exec -n gitlab -it -c toolbox $(kubectl get po -n gitlab -l='app=toolbox,!job-name' -o jsonpath='{.items[].metadata.name}') -- bash << EOF
+ $(echo -e $COMMAND)
+EOF
+) | tee -a GITALY_NODE_CHECKSUM.log
+```
+Unable to use a TTY - input is not a terminal or the right kind of file
+b239 | 7f0deacdf49937b3c211b21c54332c44911cb239
+
+Project name | gtlc-1 (primary)                         | gtlc-0                                   | gtlc-2
+---------------------------------------------------------------------------------------------------------------------------------------------   
+test3        | bacabd0c3377639c19404f1e31f248a3bc892f48 | bacabd0c3377639c19404f1e31f248a3bc892f48 | bacabd0c3377639c19404f1e31f248a3bc892f48   
+
+Project name | gtlc-2 (primary)                         | gtlc-0                                   | gtlc-1
+---------------------------------------------------------------------------------------------------------------------------------------------   
+test4        | 0c057ce134ed01cc65b4932ab7d806e8404d732d | 0c057ce134ed01cc65b4932ab7d806e8404d732d | 0c057ce134ed01cc65b4932ab7d806e8404d732d   
+
+Project name | gtlc-1 (primary)                         | gtlc-0                                   | gtlc-2
+---------------------------------------------------------------------------------------------------------------------------------------------   
+test5        | 1d19079bfec4ddb61b556133e0ce9b5e7753e85e | 1d19079bfec4ddb61b556133e0ce9b5e7753e85e | 1d19079bfec4ddb61b556133e0ce9b5e7753e85e   
+
+Project name | gtlc-1 (primary)                         | gtlc-0                                   | gtlc-2
+---------------------------------------------------------------------------------------------------------------------------------------------   
+test6        | b52f2d22f83c594396b715965174fa3601ad3d9e | b52f2d22f83c594396b715965174fa3601ad3d9e | b52f2d22f83c594396b715965174fa3601ad3d9e   
+
+Project name | gtlc-2 (primary)                         | gtlc-0                                   | gtlc-1
+---------------------------------------------------------------------------------------------------------------------------------------------
+test7        | a05cfe92be015d08e6f5a88eceb8e95b281f7a05 | a05cfe92be015d08e6f5a88eceb8e95b281f7a05 | a05cfe92be015d08e6f5a88eceb8e95b281f7a05
+
+Project name | gtlc-2 (primary)                         | gtlc-0                                   | gtlc-1
+---------------------------------------------------------------------------------------------------------------------------------------------
+test8        | 42dd9ca6664a74701a23913ce51ef778f1666c02 | 42dd9ca6664a74701a23913ce51ef778f1666c02 | 42dd9ca6664a74701a23913ce51ef778f1666c02
+
+Project name | gtlc-1 (primary)                         | gtlc-0                                   | gtlc-2
+---------------------------------------------------------------------------------------------------------------------------------------------
+test9        | 894581f38beefd14956c528c0273423f929e28e9 | 894581f38beefd14956c528c0273423f929e28e9 | 894581f38beefd14956c528c0273423f929e28e9
+
+Project name | gtlc-2 (primary)                         | gtlc-0                                   | gtlc-1
+---------------------------------------------------------------------------------------------------------------------------------------------
+test10       | d1a1481c724a83224528c7a4e6f914a5bc4254e0 | d1a1481c724a83224528c7a4e6f914a5bc4254e0 | d1a1481c724a83224528c7a4e6f914a5bc4254e0
+
+```
+
+
+
+13. ファイルコミット：test1_after_01..		
+
